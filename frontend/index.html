@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能营养与减脂规划助手</title>
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <!-- Element Plus -->
+    <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css">
+    <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
+    <!-- Element Plus Icons -->
+    <script src="https://unpkg.com/@element-plus/icons-vue"></script>
+    <!-- AntV G6 -->
+    <script src="https://unpkg.com/@antv/g6@5/dist/g6.min.js"></script>
+    <!-- Axios -->
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Microsoft YaHei', sans-serif; background: #f5f7fa; color: #333; }
+        #app { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        
+        .header { text-align: center; padding: 30px 0 20px; }
+        .header h1 { font-size: 28px; color: #409eff; margin-bottom: 8px; }
+        .header p { color: #909399; font-size: 14px; }
+        
+        .main-layout { display: grid; grid-template-columns: 1fr 300px; gap: 20px; margin-top: 20px; }
+        @media (max-width: 768px) { .main-layout { grid-template-columns: 1fr; } }
+        
+        .sidebar-card { margin-bottom: 20px; }
+        .hot-food-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
+        .hot-food-item:last-child { border-bottom: none; }
+        .hot-food-rank { font-weight: bold; color: #409eff; margin-right: 10px; }
+        .hot-food-count { color: #909399; font-size: 13px; }
+        
+        .graph-container { width: 100%; height: 500px; border: 1px solid #e4e7ed; border-radius: 8px; overflow: hidden; }
+        
+        .chat-container { height: 400px; overflow-y: auto; padding: 15px; background: #fafafa; border-radius: 8px; }
+        .chat-msg { margin-bottom: 15px; display: flex; }
+        .chat-msg.user { justify-content: flex-end; }
+        .chat-msg.bot { justify-content: flex-start; }
+        .chat-bubble { max-width: 80%; padding: 10px 15px; border-radius: 15px; font-size: 14px; line-height: 1.6; }
+        .chat-msg.user .chat-bubble { background: #409eff; color: #fff; border-radius: 15px 15px 4px 15px; }
+        .chat-msg.bot .chat-bubble { background: #fff; color: #333; border: 1px solid #e4e7ed; border-radius: 15px 15px 15px 4px; }
+        
+        .plan-result { margin-top: 20px; }
+        .plan-macro { display: flex; gap: 15px; flex-wrap: wrap; margin: 15px 0; }
+        .plan-macro-item { flex: 1; min-width: 120px; text-align: center; padding: 15px; background: #f0f9ff; border-radius: 8px; }
+        .plan-macro-item .value { font-size: 24px; font-weight: bold; color: #409eff; }
+        .plan-macro-item .label { font-size: 13px; color: #909399; margin-top: 5px; }
+        
+        .meal-card { border: 1px solid #e4e7ed; border-radius: 8px; padding: 15px; margin-bottom: 10px; }
+        .meal-card h4 { color: #409eff; margin-bottom: 10px; }
+        .meal-card .meal-total { font-size: 13px; color: #909399; }
+        
+        .el-tabs { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 2px 12px rgba(0,0,0,0.05); }
+        
+        .loading-spinner { display: flex; justify-content: center; align-items: center; height: 200px; }
+        
+        .food-card { cursor: pointer; transition: all 0.3s; }
+        .food-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        
+        .el-tag { margin: 2px; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="header">
+            <h1>🥗 智能营养与减脂规划助手</h1>
+            <p>基于知识图谱 + RAG + Redis 高并发缓存的减脂智能助手</p>
+        </div>
+        
+        <div class="main-layout">
+            <div class="content-area">
+                <el-tabs v-model="activeTab" type="border-card">
+                    <!-- Tab 1: 食物图谱 -->
+                    <el-tab-pane label="🔍 食物图谱" name="food">
+                        <el-input v-model="foodKeyword" placeholder="搜索食物名称（如：鸡胸肉、西兰花）" clearable
+                            @keyup.enter="searchFoods" style="margin-bottom: 15px;">
+                            <template #append>
+                                <el-button @click="searchFoods" type="primary">搜索</el-button>
+                            </template>
+                        </el-input>
+                        
+                        <div v-if="foodLoading" class="loading-spinner">
+                            <el-icon class="is-loading" style="font-size: 30px;"><Loading /></el-icon>
+                            <p>加载中...</p>
+                        </div>
+                        
+                        <div v-else-if="foods.length > 0">
+                            <el-row :gutter="15">
+                                <el-col :span="8" v-for="food in foods" :key="food.name" style="margin-bottom: 15px;">
+                                    <el-card class="food-card" shadow="hover" @click="showFoodDetail(food.name)">
+                                        <h3>{{ food.name }}</h3>
+                                        <p style="color:#909399;font-size:13px;">{{ food.category }}</p>
+                                        <div style="margin-top:10px;">
+                                            <el-tag size="small">{{ food.calories_per_100g }} kcal</el-tag>
+                                        </div>
+                                        <div style="margin-top:5px;font-size:12px;color:#909399;">
+                                            蛋白质: {{ food.protein }}g | 碳水: {{ food.carbs }}g | 脂肪: {{ food.fat }}g
+                                        </div>
+                                    </el-card>
+                                </el-col>
+                            </el-row>
+                        </div>
+                        
+                        <div v-else-if="foodSearched" style="text-align:center;padding:40px;color:#909399;">
+                            <el-icon style="font-size:48px;"><Search /></el-icon>
+                            <p style="margin-top:10px;">未找到相关食物，请尝试其他关键词</p>
+                        </div>
+                        
+                        <div v-else style="text-align:center;padding:40px;color:#909399;">
+                            <el-icon style="font-size:48px;"><Folder /></el-icon>
+                            <p style="margin-top:10px;">输入关键词搜索食物</p>
+                        </div>
+                        
+                        <!-- 食物详情对话框 -->
+                        <el-dialog v-model="detailDialogVisible" :title="currentFood?.name" width="60%">
+                            <template v-if="currentFood">
+                                <el-descriptions :column="2" border>
+                                    <el-descriptions-item label="分类">{{ currentFood.category }}</el-descriptions-item>
+                                    <el-descriptions-item label="热量">{{ currentFood.calories_per_100g }} kcal/100g</el-descriptions-item>
+                                    <el-descriptions-item label="蛋白质">{{ currentFood.protein }}g</el-descriptions-item>
+                                    <el-descriptions-item label="碳水化合物">{{ currentFood.carbs }}g</el-descriptions-item>
+                                    <el-descriptions-item label="脂肪">{{ currentFood.fat }}g</el-descriptions-item>
+                                    <el-descriptions-item label="膳食纤维">{{ currentFood.fiber }}g</el-descriptions-item>
+                                </el-descriptions>
+                                
+                                <h4 style="margin:15px 0 10px;">营养素详情</h4>
+                                <div v-if="currentFood.nutrients && currentFood.nutrients.length > 0">
+                                    <el-tag v-for="n in currentFood.nutrients" :key="n.nutrient" 
+                                        style="margin:3px;" type="success">
+                                        {{ n.nutrient }}: {{ n.amount }}{{ n.unit }}
+                                    </el-tag>
+                                </div>
+                                <p v-else style="color:#909399;">暂无营养素关联数据</p>
+                                
+                                <!-- 图谱展示 -->
+                                <h4 style="margin:15px 0 10px;">知识图谱</h4>
+                                <div id="graph-container" class="graph-container"></div>
+                            </template>
+                        </el-dialog>
+                    </el-tab-pane>
+                    
+                    <!-- Tab 2: 智能问答 -->
+                    <el-tab-pane label="💬 智能问答" name="qa">
+                        <div class="chat-container" ref="chatContainer">
+                            <div v-for="(msg, idx) in chatMessages" :key="idx" :class="['chat-msg', msg.role]">
+                                <div class="chat-bubble">{{ msg.content }}</div>
+                            </div>
+                            <div v-if="qaLoading" class="chat-msg bot">
+                                <div class="chat-bubble">
+                                    <el-icon class="is-loading"><Loading /></el-icon> 思考中...
+                                </div>
+                            </div>
+                        </div>
+                        <div style="display:flex;gap:10px;margin-top:15px;">
+                            <el-input v-model="qaQuestion" placeholder="输入问题（如：减脂期晚上可以吃什么？）"
+                                @keyup.enter="askQuestion" clearable>
+                            </el-input>
+                            <el-button type="primary" @click="askQuestion" :disabled="qaLoading || !qaQuestion.trim()">
+                                提问
+                            </el-button>
+                        </div>
+                        <div style="margin-top:10px;">
+                            <el-tag size="small" v-for="q in sampleQuestions" :key="q" 
+                                style="margin:2px;cursor:pointer;" @click="qaQuestion = q; askQuestion()"
+                                type="info" effect="plain">
+                                {{ q }}
+                            </el-tag>
+                        </div>
+                    </el-tab-pane>
+                    
+                    <!-- Tab 3: 减脂规划 -->
+                    <el-tab-pane label="📊 减脂规划" name="plan">
+                        <el-form :model="planForm" label-width="100px" style="max-width:500px;">
+                            <el-form-item label="年龄">
+                                <el-input-number v-model="planForm.age" :min="10" :max="100" />
+                            </el-form-item>
+                            <el-form-item label="性别">
+                                <el-radio-group v-model="planForm.gender">
+                                    <el-radio value="male">男</el-radio>
+                                    <el-radio value="female">女</el-radio>
+                                </el-radio-group>
+                            </el-form-item>
+                            <el-form-item label="身高(cm)">
+                                <el-input-number v-model="planForm.height" :min="100" :max="250" :step="1" />
+                            </el-form-item>
+                            <el-form-item label="体重(kg)">
+                                <el-input-number v-model="planForm.weight" :min="30" :max="300" :step="0.5" />
+                            </el-form-item>
+                            <el-form-item label="活动水平">
+                                <el-select v-model="planForm.activity_level" style="width:100%;">
+                                    <el-option label="久坐（几乎不运动）" value="sedentary" />
+                                    <el-option label="轻度活动（每周1-3天）" value="light" />
+                                    <el-option label="中度活动（每周3-5天）" value="moderate" />
+                                    <el-option label="积极活动（每周6-7天）" value="active" />
+                                    <el-option label="高强度活动（每天训练）" value="very_active" />
+                                </el-select>
+                            </el-form-item>
+                            <el-form-item label="减脂目标">
+                                <el-radio-group v-model="planForm.goal">
+                                    <el-radio value="lose">减脂</el-radio>
+                                    <el-radio value="maintain">维持</el-radio>
+                                    <el-radio value="gain">增肌</el-radio>
+                                </el-radio-group>
+                            </el-form-item>
+                            <el-form-item>
+                                <el-button type="primary" @click="generatePlan" :loading="planLoading" size="large">
+                                    生成规划
+                                </el-button>
+                            </el-form-item>
+                        </el-form>
+                        
+                        <!-- 减脂规划结果弹窗 -->
+                        <el-dialog v-model="planDialogVisible" title="📋 你的个性化减脂规划" width="70%">
+                            <template v-if="planResult">
+                                <div class="plan-macro">
+                                    <div class="plan-macro-item">
+                                        <div class="value">{{ planResult.bmr }}</div>
+                                        <div class="label">基础代谢 BMR (kcal)</div>
+                                    </div>
+                                    <div class="plan-macro-item">
+                                        <div class="value">{{ planResult.tdee }}</div>
+                                        <div class="label">每日消耗 TDEE (kcal)</div>
+                                    </div>
+                                    <div class="plan-macro-item">
+                                        <div class="value" style="color:#e6a23c;">{{ planResult.daily_calories }}</div>
+                                        <div class="label">推荐摄入 (kcal)</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="plan-macro">
+                                    <div class="plan-macro-item" style="background:#fef0f0;">
+                                        <div class="value" style="color:#f56c6c;">{{ planResult.daily_protein }}g</div>
+                                        <div class="label">蛋白质</div>
+                                    </div>
+                                    <div class="plan-macro-item" style="background:#fdf6ec;">
+                                        <div class="value" style="color:#e6a23c;">{{ planResult.daily_carbs }}g</div>
+                                        <div class="label">碳水化合物</div>
+                                    </div>
+                                    <div class="plan-macro-item" style="background:#f0f9eb;">
+                                        <div class="value" style="color:#67c23a;">{{ planResult.daily_fat }}g</div>
+                                        <div class="label">脂肪</div>
+                                    </div>
+                                </div>
+                                
+                                <h4>🍽️ 推荐三餐</h4>
+                                <div v-for="meal in planResult.meals" :key="meal.meal_type" class="meal-card">
+                                    <h4>{{ meal.meal_type }}</h4>
+                                    <div class="meal-total">
+                                        热量: {{ meal.total_calories }} kcal | 
+                                        蛋白质: {{ meal.total_protein }}g | 
+                                        碳水: {{ meal.total_carbs }}g | 
+                                        脂肪: {{ meal.total_fat }}g
+                                    </div>
+                                    <div style="margin-top:8px;">
+                                        <el-tag v-for="food in meal.foods" :key="food.name" style="margin:2px;">
+                                            {{ food.name }} ({{ food.calories_per_100g }}kcal/100g)
+                                        </el-tag>
+                                    </div>
+                                </div>
+                            </template>
+                            <template #footer>
+                                <el-button @click="planDialogVisible = false">关闭</el-button>
+                            </template>
+                        </el-dialog>
+                    </el-tab-pane>
+                </el-tabs>
+            </div>
+            
+            <!-- 侧边栏：热门食物排行榜 -->
+            <div class="sidebar">
+                <el-card class="sidebar-card">
+                    <template #header>
+                        <span>🔥 热门食物排行榜</span>
+                    </template>
+                    <div v-if="hotFoods.length === 0" style="text-align:center;color:#909399;padding:20px;">
+                        <p>暂无数据</p>
+                        <p style="font-size:12px;">搜索食物后将显示排行榜</p>
+                    </div>
+                    <div v-for="(food, idx) in hotFoods" :key="food.name" class="hot-food-item">
+                        <div>
+                            <span class="hot-food-rank">{{ idx + 1 }}</span>
+                            <span>{{ food.name }}</span>
+                        </div>
+                        <span class="hot-food-count">{{ food.query_count }} 次查询</span>
+                    </div>
+                </el-card>
+                
+                <el-card class="sidebar-card">
+                    <template #header>
+                        <span>⚡ 系统状态</span>
+                    </template>
+                    <div style="font-size:13px;color:#909399;">
+                        <p>✅ 后端服务运行中</p>
+                        <p>📡 Redis 缓存已启用</p>
+                        <p>🔗 Neo4j 知识图谱就绪</p>
+                        <p>🤖 LLM 就绪 (Mock 模式)</p>
+                    </div>
+                </el-card>
+            </div>
+        </div>
+        
+        <div style="text-align:center;padding:20px;color:#c0c4cc;font-size:12px;margin-top:30px;">
+            <p>智能营养与减脂规划助手 v1.0 | Powered by FastAPI + Neo4j + Redis + Vue 3</p>
+        </div>
+    </div>
+    
+    <script>
+        const { createApp, ref, reactive, computed, nextTick, onMounted, watch } = Vue;
+        
+        const API_BASE = 'http://localhost:8000/api';
+        
+        const app = createApp({
+            setup() {
+                const activeTab = ref('food');
+                const foodKeyword = ref('');
+                const foods = ref([]);
+                const foodLoading = ref(false);
+                const foodSearched = ref(false);
+                const detailDialogVisible = ref(false);
+                const currentFood = ref(null);
+                
+                // 问答
+                const qaQuestion = ref('');
+                const qaLoading = ref(false);
+                const chatMessages = ref([
+                    { role: 'bot', content: '你好！我是营养与减脂顾问。你可以问我关于饮食、运动、减脂方面的问题。' }
+                ]);
+                const sampleQuestions = [
+                    '减脂期晚上可以吃什么？',
+                    '鸡胸肉和鱼肉哪个更适合减脂？',
+                    '减脂期怎么吃碳水？',
+                    '每天该摄入多少蛋白质？'
+                ];
+                
+                // 规划
+                const planForm = reactive({
+                    age: 28,
+                    gender: 'male',
+                    height: 175,
+                    weight: 75,
+                    activity_level: 'moderate',
+                    goal: 'lose'
+                });
+                const planLoading = ref(false);
+                const planResult = ref(null);
+                const planDialogVisible = ref(false);
+                
+                // 热门食物
+                const hotFoods = ref([]);
+                
+                const chatContainer = ref(null);
+                
+                // 搜索食物
+                const searchFoods = async () => {
+                    if (!foodKeyword.value.trim()) return;
+                    foodLoading.value = true;
+                    foodSearched.value = true;
+                    try {
+                        const res = await axios.get(`${API_BASE}/foods`, {
+                            params: { keyword: foodKeyword.value }
+                        });
+                        foods.value = res.data.data || [];
+                    } catch (err) {
+                        console.error(err);
+                        foods.value = [];
+                    } finally {
+                        foodLoading.value = false;
+                    }
+                };
+                
+                // 显示食物详情
+                const showFoodDetail = async (name) => {
+                    try {
+                        const res = await axios.get(`${API_BASE}/foods/${encodeURIComponent(name)}`);
+                        currentFood.value = res.data.data;
+                        detailDialogVisible.value = true;
+                        
+                        // 加载图谱
+                        nextTick(() => {
+                            loadGraph(name);
+                        });
+                        
+                        // 刷新热门食物
+                        loadHotFoods();
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                
+                // 加载知识图谱
+                const loadGraph = async (name) => {
+                    try {
+                        const res = await axios.get(`${API_BASE}/foods/${encodeURIComponent(name)}/graph`);
+                        const graphData = res.data.data;
+                        
+                        const container = document.getElementById('graph-container');
+                        if (!container || !graphData || !graphData.nodes || graphData.nodes.length === 0) return;
+                        
+                        // Clear previous
+                        container.innerHTML = '';
+                        
+                        // 使用 G6 渲染
+                        const { Graph } = G6;
+                        
+                        const data = {
+                            nodes: graphData.nodes.map(n => ({
+                                id: n.id,
+                                label: n.label,
+                                data: { type: n.type, ...n }
+                            })),
+                            edges: graphData.edges.map(e => ({
+                                source: e.source,
+                                target: e.target,
+                                label: e.label,
+                                data: e
+                            }))
+                        };
+                        
+                        const graph = new Graph({
+                            container: 'graph-container',
+                            data,
+                            layout: { type: 'force', preventOverlap: true, linkDistance: 150 },
+                            node: {
+                                style: (model) => {
+                                    const type = model.data.type;
+                                    let fill = '#409eff';
+                                    if (type === 'nutrient') fill = '#67c23a';
+                                    else if (type === 'stage') fill = '#e6a23c';
+                                    else if (type === 'exercise') fill = '#f56c6c';
+                                    return {
+                                        size: type === 'food' ? 60 : 40,
+                                        fill,
+                                        labelPlacement: 'bottom',
+                                        labelOffsetY: 5
+                                    };
+                                },
+                                label: { style: { fontSize: 12, fill: '#333' } }
+                            },
+                            edge: {
+                                style: { stroke: '#ddd', labelFill: '#909399', labelFontSize: 10 },
+                                label: { style: { fill: '#909399', fontSize: 10 } }
+                            },
+                            behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element']
+                        });
+                        
+                        graph.render();
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                
+                // 问答
+                const askQuestion = async () => {
+                    if (!qaQuestion.value.trim() || qaLoading.value) return;
+                    
+                    const question = qaQuestion.value.trim();
+                    chatMessages.value.push({ role: 'user', content: question });
+                    qaQuestion.value = '';
+                    qaLoading.value = true;
+                    
+                    try {
+                        const res = await axios.post(`${API_BASE}/qa/ask`, { question });
+                        chatMessages.value.push({ role: 'bot', content: res.data.answer || '抱歉，暂时无法回答这个问题。' });
+                    } catch (err) {
+                        chatMessages.value.push({ role: 'bot', content: '请求失败，请检查后端服务是否正常运行。' });
+                    } finally {
+                        qaLoading.value = false;
+                        nextTick(() => {
+                            if (chatContainer.value) {
+                                chatContainer.value.scrollTop = chatContainer.value.scrollHeight;
+                            }
+                        });
+                    }
+                };
+                
+                // 生成规划
+                const generatePlan = async () => {
+                    planLoading.value = true;
+                    try {
+                        const res = await axios.post(`${API_BASE}/plan/generate`, planForm);
+                        planResult.value = res.data;
+                        planDialogVisible.value = true;
+                    } catch (err) {
+                        if (err.response && err.response.status === 429) {
+                            ElementPlus.ElMessage.warning('请求过于频繁，请稍后再试（每 IP 每分钟限制 10 次）');
+                        } else {
+                            ElementPlus.ElMessage.error('生成规划失败，请检查后端服务');
+                        }
+                    } finally {
+                        planLoading.value = false;
+                    }
+                };
+                
+                // 加载热门食物
+                const loadHotFoods = async () => {
+                    try {
+                        const res = await axios.get(`${API_BASE}/stats/hot_foods`);
+                        hotFoods.value = res.data.foods || [];
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                
+                onMounted(() => {
+                    loadHotFoods();
+                });
+                
+                return {
+                    activeTab, foodKeyword, foods, foodLoading, foodSearched,
+                    detailDialogVisible, currentFood,
+                    qaQuestion, qaLoading, chatMessages, sampleQuestions, chatContainer,
+                    planForm, planLoading, planResult, planDialogVisible,
+                    hotFoods,
+                    searchFoods, showFoodDetail, askQuestion, generatePlan
+                };
+            }
+        });
+        
+        // 注册 Element Plus
+        for (const key in ElementPlusIconsVue) {
+            app.component(key, ElementPlusIconsVue[key]);
+        }
+        
+        app.use(ElementPlus);
+        app.mount('#app');
+    </script>
+</body>
+</html>
